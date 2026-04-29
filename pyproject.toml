@@ -1,0 +1,109 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jax-ldt"
+version = "0.0.1"
+description = "Pure-JAX linear and hyperplane decision trees for piecewise-linear surrogate modeling"
+readme = "README.md"
+requires-python = ">=3.10,<3.14"
+authors = [{ name = "John Kitchin", email = "jkitchin@andrew.cmu.edu" }]
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = [
+    "jax",
+    "decision-trees",
+    "surrogate-modeling",
+    "active-learning",
+    "bayesian-optimization",
+    "uncertainty-quantification",
+    "piecewise-linear",
+    "hyperplane-trees",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Typing :: Typed",
+]
+# JAX has been API-churn-y at the 0.x level; pin a known-good ceiling
+# we have tested against (currently 0.9.x). Bump deliberately as new
+# JAX majors land and the test suite is re-run.
+dependencies = [
+    "jax>=0.4,<1.0",
+    "jaxlib>=0.4,<1.0",
+    "numpy>=1.24,<3.0",
+]
+
+[project.optional-dependencies]
+onnx = ["onnx", "onnxruntime"]
+viz = ["matplotlib"]
+discopt = ["discopt>=0.3"]
+uq-metrics = ["uncertainty-toolbox"]
+steam = ["iapws"]
+sklearn = ["scikit-learn"]
+# Numerical-equivalence tests against the upstream PyTorch
+# hyperplanetree implementation. Heavy and only needed for `pytest -m
+# parity` runs, so it lives in its own extra rather than in [dev].
+parity = [
+    "torch",
+    "scikit-learn",
+]
+# Lean tooling-only extra so a fast CI subset can run without pulling in
+# torch/onnx/matplotlib. Compose extras as needed:
+#   pip install -e .[dev]                     # lint + unit tests
+#   pip install -e .[dev,onnx,viz,sklearn]    # full non-parity suite
+#   pip install -e .[dev,parity]              # parity comparison vs PyTorch
+dev = [
+    "pytest",
+    "pytest-benchmark",
+    "hypothesis",
+    "ruff",
+    "mypy",
+]
+# Convenience meta-extra that matches the historical `[dev]` bundle so
+# existing CI configs / READMEs keep working.
+dev-full = [
+    "jax-ldt[dev,onnx,viz,sklearn]",
+]
+
+[project.urls]
+Repository = "https://github.com/jkitchin/jax-ldt"
+Issues = "https://github.com/jkitchin/jax-ldt/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Default to skipping perf benchmarks; opt in with `pytest -m perf` (or
+# `-m "perf or not perf"` to run everything).
+addopts = "-m 'not perf'"
+markers = [
+    "parity: numerical equivalence tests against upstream PyTorch hyperplanetree",
+    "perf: performance benchmarks (slow)",
+    "discopt: tests requiring discopt",
+    "onnx: tests requiring onnx/onnxruntime",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501"]
+
+[tool.mypy]
+strict = true
+ignore_missing_imports = true
+files = ["src/jax_ldt"]
