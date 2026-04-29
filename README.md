@@ -16,6 +16,8 @@ library, omitting the Pyomo/OMLT runtime dependency. Trained models
 export to a solver-neutral JSON spec and to ONNX, which can still be
 consumed by OMLT externally for MILP embedding.
 
+This implementation was motivated by this work: Ethan M. Sunshine, Carolina Colombo Tedesco, Sneha A. Akhade, Matthew J. McNenly, John R. Kitchin, and Carl D. Laird, Hyperplane Decision Trees as Piecewise Linear Surrogate Models for Chemical Process Design, Computers & Chemical Engineering, (2025). https://doi.org/10.1016/j.compchemeng.2025.109204. 
+
 ## What is a hyperplane tree?
 
 A **linear-model decision tree (LMDT)** is a decision tree where every
