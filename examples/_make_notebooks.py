@@ -704,6 +704,79 @@ im1 = axes[1].pcolormesh(hh_grid, pp_grid, np.where(mask, T_pred, np.nan),
                          cmap="viridis", vmin=vmin, vmax=vmax, shading="auto")
 axes[1].set_title(f"AL-trained HT ({ht_al.num_leaves} leaves, "
                   f"n={loop.X_observed.shape[0]})")
+# overlay hyperplane cuts as straight line segments. Walk the tree and
+# for each internal node clip the split hyperplane to the polytope of
+# ancestor inequalities, giving exactly the segment that bounds two
+# leaf regions in plot (h, P) coordinates.
+from matplotlib.collections import LineCollection
+
+tree = ht_al.tree_
+A = np.asarray(tree.transform_matrix)            # (n_features_in=2, n_lifted)
+is_leaf = np.asarray(tree.is_leaf)
+feature = np.asarray(tree.feature)
+threshold = np.asarray(tree.threshold)
+left = np.asarray(tree.left)
+right = np.asarray(tree.right)
+
+def _clip_halfplane(poly, a, b, c):
+    """Return poly ∩ {a*x + b*y <= c} via Sutherland-Hodgman."""
+    if not poly:
+        return []
+    out = []
+    n = len(poly)
+    for i in range(n):
+        p, q = poly[i], poly[(i + 1) % n]
+        dp = a * p[0] + b * p[1] - c
+        dq = a * q[0] + b * q[1] - c
+        p_in, q_in = dp <= 1e-12, dq <= 1e-12
+        if p_in and q_in:
+            out.append(q)
+        elif p_in and not q_in:
+            t = dp / (dp - dq)
+            out.append((p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1])))
+        elif not p_in and q_in:
+            t = dp / (dp - dq)
+            out.append((p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1])))
+            out.append(q)
+    return out
+
+def _line_x_polygon(poly, a, b, c):
+    """Intersection of the line a*x + b*y = c with convex polygon poly."""
+    pts = []
+    n = len(poly)
+    for i in range(n):
+        p, q = poly[i], poly[(i + 1) % n]
+        dp = a * p[0] + b * p[1] - c
+        dq = a * q[0] + b * q[1] - c
+        if dp == 0:
+            pts.append(p)
+        elif dp * dq < 0:
+            t = dp / (dp - dq)
+            pts.append((p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1])))
+    return pts
+
+# X column order is [P, h]; plot axes are (x=h, y=P).
+# Split (X @ A)[:, f] <= t  →  A[0,f]*P + A[1,f]*h <= t
+# In plot coords (h, P): coefs are (A[1,f], A[0,f]).
+h_min, h_max = float(hh_grid.min()), float(hh_grid.max())
+p_min, p_max = float(pp_grid.min()), float(pp_grid.max())
+root_poly = [(h_min, p_min), (h_max, p_min), (h_max, p_max), (h_min, p_max)]
+
+segs = []
+stack = [(0, root_poly)]
+while stack:
+    node, poly = stack.pop()
+    if is_leaf[node] or not poly:
+        continue
+    f = int(feature[node])
+    t = float(threshold[node])
+    a, b = float(A[1, f]), float(A[0, f])  # coefs of (h, P)
+    pts = _line_x_polygon(poly, a, b, t)
+    if len(pts) >= 2:
+        segs.append([pts[0], pts[-1]])
+    stack.append((int(left[node]), _clip_halfplane(poly, a, b, t)))
+    stack.append((int(right[node]), _clip_halfplane(poly, -a, -b, -t)))
+axes[1].add_collection(LineCollection(segs, colors="k", linewidths=0.6))
 axes[2].pcolormesh(hh_grid, pp_grid, np.where(mask, leaves, -1),
                    cmap="tab20", shading="auto")
 axes[2].set_title("HT leaf partition")
