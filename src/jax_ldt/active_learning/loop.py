@@ -6,6 +6,13 @@ State machine:
   primed     → data observed; tree refit; ask() returns next batch.
   asked      → batch handed out; pending until tell() consumes it.
 
+Targets:
+- `y` may be `(n,)` / `(n, 1)` (single target) or `(n, k)` (multi-target).
+  Multi-target campaigns require an acquisition that advertises
+  `requires_scalar_target = False` (UncertaintySampler, MaxVariance);
+  pairing one with EI/PI raises. The target count is fixed by the first
+  `tell()`.
+
 Persistence (campaign file):
 - X_observed, y_observed
 - jax PRNGKey state
@@ -31,6 +38,18 @@ from scipy.stats import qmc
 
 
 class _AcquisitionLike(Protocol):
+    """Minimal acquisition interface.
+
+    Optional attributes/methods the loop uses when present:
+
+    * ``requires_scalar_target: bool`` — declares whether the acquisition
+      needs a scalar objective. Missing means ``True`` (conservative).
+    * ``update_best(y_observed)`` — called before scoring, for
+      best-observed-y acquisitions.
+    * ``update_target_scales(y_observed)`` — called before scoring, to
+      supply fallback per-target scales for multi-target reductions.
+    """
+
     def score(self, model: Any, X: jnp.ndarray) -> np.ndarray: ...
 
 
@@ -53,6 +72,28 @@ class _Round:
     X: np.ndarray
     y: np.ndarray
     scores: np.ndarray
+
+
+def _normalize_y(y: Union[np.ndarray, jnp.ndarray]) -> np.ndarray:
+    """Coerce user `y` to `(n,)` (single target) or `(n, k)` (multi).
+
+    `(n, 1)` collapses to `(n,)` so single-target campaigns keep exactly
+    their historical shape regardless of how the caller spelled it.
+    """
+    arr = np.asarray(y, dtype=np.float64)
+    if arr.ndim == 0:
+        return arr.reshape(1)
+    if arr.ndim == 1:
+        return arr
+    if arr.ndim == 2:
+        return arr[:, 0] if arr.shape[1] == 1 else arr
+    raise ValueError(
+        f"y must be 1-D (n,) or 2-D (n, n_targets); got shape {arr.shape}."
+    )
+
+
+def _n_targets_of(y: np.ndarray) -> int:
+    return 1 if y.ndim == 1 else int(y.shape[1])
 
 
 class ActiveLearner:
@@ -118,6 +159,11 @@ class ActiveLearner:
         self._rng_step += 1
         return key
 
+    @property
+    def n_targets(self) -> int:
+        """Number of targets in the observed data (1 until y is 2-D)."""
+        return _n_targets_of(self.y_observed)
+
     # ---- core primitives ----
 
     def tell(
@@ -134,16 +180,17 @@ class ActiveLearner:
           handed-out batch. `indices` lists which rows of the original
           batch were actually evaluated; defaults to all rows.
         - `tell(X, y)`: provide initial training data not from `ask()`.
+
+        `y` is `(n,)` / `(n, 1)` for a single target or `(n, k)` for `k`
+        targets; `(n, 1)` is normalised to `(n,)`. The first `tell()`
+        fixes the campaign's target count.
         """
-        y_raw = np.asarray(y, dtype=np.float64)
-        if y_raw.ndim > 1 and y_raw.shape[-1] > 1:
-            raise ValueError(
-                "ActiveLearner currently supports only single-target objectives "
-                f"(got y with shape {y_raw.shape}). Acquisitions like "
-                "ExpectedImprovement assume a scalar best-y. Multi-target AL "
-                "requires a scalarisation or multi-objective acquisition."
-            )
-        y_arr = y_raw.reshape(-1)
+        y_arr = _normalize_y(y)
+        # Multi-target data is only a problem for acquisitions that score
+        # against a scalar best-y; the surrogate, the UQ path and the
+        # exploration acquisitions all handle (n, k) natively. Check the
+        # pairing, not the data.
+        self._check_acquisition_targets(_n_targets_of(y_arr))
 
         if isinstance(batch_id_or_X, str):
             batch_id = batch_id_or_X
@@ -226,9 +273,16 @@ class ActiveLearner:
                     "Enlarge the pool or answer pending batches first."
                 )
 
-        # Acquisition score
+        # Acquisition score. Re-check the pairing here too: the
+        # acquisition is a mutable attribute, so it may have been swapped
+        # for a scalar-only one after multi-target data was ingested.
+        self._check_acquisition_targets(self.n_targets)
         if hasattr(self.acquisition, "update_best"):
             self.acquisition.update_best(self.y_observed)
+        # Fallback per-target scales for multi-target reductions. An
+        # acquisition with explicit `target_scales` ignores these.
+        if hasattr(self.acquisition, "update_target_scales"):
+            self.acquisition.update_target_scales(self.y_observed)
         scores = np.asarray(self.acquisition.score(self.model, jnp.asarray(candidates)))
 
         # Give a seed-aware batcher (e.g. DiverseBatchSelector) that has NO
@@ -261,7 +315,7 @@ class ActiveLearner:
         """
         for _ in range(n_rounds):
             batch_id, X_batch = self.ask()
-            y_batch = np.asarray(run_experiment(X_batch), dtype=np.float64).reshape(-1)
+            y_batch = _normalize_y(run_experiment(X_batch))
             self.tell(batch_id, y_batch)
 
     # ---- persistence ----
@@ -272,6 +326,10 @@ class ActiveLearner:
             "version": 2,
             "X_observed": self.X_observed.tolist(),
             "y_observed": self.y_observed.tolist(),
+            # Metadata: `load` infers the layout from `y_observed`'s
+            # nesting, but a human or external reader of the campaign
+            # file should not have to.
+            "n_targets": self.n_targets,
             "seed": self._seed,
             "rng_step": self._rng_step,
             "bounds": self.bounds.tolist(),
@@ -338,7 +396,12 @@ class ActiveLearner:
         loop.X_observed = np.asarray(d["X_observed"], dtype=np.float64).reshape(
             -1, bounds.shape[0]
         )
-        loop.y_observed = np.asarray(d["y_observed"], dtype=np.float64).reshape(-1)
+        # `y_observed` is stored nested for multi-target campaigns and
+        # flat for single-target ones, so np.asarray recovers either
+        # shape. A campaign saved before its first tell() has no targets
+        # fixed yet, so it restores to (0,) exactly as a fresh loop does.
+        y_loaded = np.asarray(d["y_observed"], dtype=np.float64)
+        loop.y_observed = y_loaded if y_loaded.size else np.zeros((0,), dtype=np.float64)
         loop.pending = {
             bid: _PendingBatch(
                 batch_id=p["batch_id"],
@@ -364,9 +427,36 @@ class ActiveLearner:
 
     # ---- internals ----
 
+    def _check_acquisition_targets(self, n_targets: int) -> None:
+        """Reject only scalar-only acquisition + multi-target data.
+
+        The capability lives on the acquisition (`requires_scalar_target`);
+        acquisitions that do not declare it are assumed scalar-only.
+        """
+        if n_targets <= 1:
+            return
+        if getattr(self.acquisition, "requires_scalar_target", True):
+            raise ValueError(
+                f"{type(self.acquisition).__name__} supports only single-target "
+                f"objectives (got y with {n_targets} targets): it scores against "
+                "a scalar best-y. For multi-target campaigns use an acquisition "
+                "with requires_scalar_target=False (UncertaintySampler, "
+                "MaxVariance), or pass a scalarisation of y."
+            )
+
     def _extend_data(self, X: np.ndarray, y: np.ndarray) -> None:
+        y = np.asarray(y, dtype=np.float64)
+        if self.y_observed.shape[0] == 0:
+            # First data in: the target layout is fixed here.
+            self.y_observed = np.zeros((0,) + y.shape[1:], dtype=np.float64)
+        elif self.y_observed.shape[1:] != y.shape[1:]:
+            raise ValueError(
+                f"y has {_n_targets_of(y)} target(s) but this campaign already "
+                f"holds {self.n_targets}; the target count is fixed at the first "
+                "tell()."
+            )
         self.X_observed = np.concatenate([self.X_observed, np.asarray(X)], axis=0)
-        self.y_observed = np.concatenate([self.y_observed, np.asarray(y)], axis=0)
+        self.y_observed = np.concatenate([self.y_observed, y], axis=0)
 
     def _refit_model(self) -> None:
         self.model = self.model_factory()

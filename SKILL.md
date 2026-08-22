@@ -50,9 +50,17 @@ Key differences from upstream:
 
 ## Installation
 
+Not published on PyPI — install from the repository:
+
 ```bash
+pip install "jax-ldt @ git+https://github.com/jkitchin/jax-ldt.git"
+# or, from a checkout:
 pip install -e ".[dev,onnx]"
 ```
+
+64-bit JAX must be enabled **before** `jax` / `jax_ldt` is imported
+(`os.environ["JAX_ENABLE_X64"] = "1"`); otherwise every fit raises a
+`RuntimeError`.
 
 Optional extras:
 
@@ -178,12 +186,26 @@ subset of the original batch. Unanswered rows stay pending; the next
 
 ### 4. Acquisitions and batchers
 
-| acquisition | use when |
-|-------------|----------|
-| `UncertaintySampler` | pure exploration; score = σ |
-| `MaxVariance` | pure exploration; score = σ² (argmax-equivalent) |
-| `ExpectedImprovement(direction="min")` | classic Bayesian optimisation |
-| `ProbabilityOfImprovement` | conservative variant of EI |
+| acquisition | use when | multi-target |
+|-------------|----------|--------------|
+| `UncertaintySampler` | pure exploration; score = σ | yes |
+| `MaxVariance` | pure exploration; score = σ² (argmax-equivalent) | yes |
+| `ExpectedImprovement(direction="min")` | classic Bayesian optimisation | no |
+| `ProbabilityOfImprovement` | conservative variant of EI | no |
+
+**Multi-target campaigns.** `tell` accepts `y` of shape `(n, k)`. The
+single-target constraint belongs to the acquisition, not the data: each
+acquisition declares `requires_scalar_target`, and only a scalar-only
+acquisition (EI / PI, which need a scalar best-y) paired with `(n, k)`
+data raises. Per-target σ is reduced to one score per candidate by
+dividing by `target_scales` — ideally the tolerance required on each
+target — and taking the per-candidate `max` (or `mean` via
+`reduce="mean"`). Left as `None`, the loop substitutes each target's
+observed standard deviation each round.
+
+```python
+UncertaintySampler(target_scales=[0.01, 5.0])   # tight on target 0
+```
 
 | batcher | strategy |
 |---------|----------|

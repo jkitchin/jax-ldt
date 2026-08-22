@@ -117,13 +117,12 @@ test_performance) are now in place; the remaining gaps are:
 - **Fix:** rerun the suite and update the table; consider a CI job that
   posts the numbers.
 
-### G-36. Active learning callback shape coercion
-- **Where:** `ActiveLearner.run` does `np.asarray(...).reshape(-1)` on
-  the user callback's return value, which silently flattens `(N, 1)` to
-  `(N,)`. Fine for single output; broken for multi-output (related to
-  the multi-target AL gap below).
-- **Fix:** keep the boundary check from G-9 in mind; once multi-target
-  AL is supported (F-6), preserve the second axis.
+### G-36. Active learning callback shape coercion — FIXED
+- **Where:** `ActiveLearner.run` did `np.asarray(...).reshape(-1)` on
+  the user callback's return value, which silently flattened `(N, 1)` to
+  `(N,)`. Fine for single output; broken for multi-output.
+- **Fix:** `run` and `tell` share `_normalize_y`, which collapses
+  `(N, 1)` to `(N,)` but preserves `(N, k)`.
 
 ---
 
@@ -152,11 +151,17 @@ inner JIT kernel under `jax.devices('gpu')`.
 A small class wrapping `discopt.doe.batch_optimal_experiment`, exposed
 only when `discopt` is installed. Documented as advanced.
 
-### F-6. Multi-target active learning support
-The boundary check is in place (multi-target `tell` raises a clear
-error), but EI/PI need to be generalised to per-target best-y plus a
-scalarisation rule. Until then, the single-output limitation should
-remain documented.
+### F-6. Multi-target active learning support — PARTIALLY DONE
+Exploration campaigns are supported (issue #3): `tell` accepts `(n, k)`
+targets, and acquisitions declare `requires_scalar_target`, so only the
+incompatible pairing (scalar-only acquisition + multi-target data) is
+rejected. `UncertaintySampler` / `MaxVariance` reduce per-target σ to one
+score by dividing by `target_scales` (defaulting to the observed
+per-target spread) and taking the per-candidate max (or mean).
+
+Still open: EI/PI need per-target best-y plus a scalarisation rule, and
+there is no genuinely multi-objective acquisition (Pareto/EHVI) — a
+scalar-only acquisition on multi-target data still raises.
 
 ### F-7. `model.uncertainty(X)` convenience method
 And the constructor-level `uq=LinearPropagationUQ()` shortcut from the
@@ -224,8 +229,10 @@ intervening work and are kept here for historical reference.
   empty `X`, length mismatch, and bad shapes.
 - **G-8.** JIT compile invariants — `_fit_leaf` is now an alias for
   `_fit_one_side`, eliminating the redundant trace.
-- **G-9.** `ActiveLearner` multi-output handling — `tell` raises a
-  clear error on multi-target inputs.
+- **G-9.** `ActiveLearner` multi-output handling — the constraint now
+  lives on the acquisition (`requires_scalar_target`): `tell` accepts
+  `(n, k)` and only a scalar-only acquisition paired with multi-target
+  data raises (issue #3, see F-6).
 - **G-10.** Notebook 02 coverage claim — markdown caveats the
   marginal / finite-sample nature of the guarantee and quotes the
   `±√(α(1-α)/N_test)` band; calibration / test sizes were bumped

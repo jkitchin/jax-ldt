@@ -4,7 +4,8 @@ Coverage gap pinned by these tests (was G-22 in GAPS.md):
 - LMDT and HT regressors fit and predict with shape (N, T)
 - ONNX export round-trips for T > 1
 - ConformalCalibrator produces (N, T) intervals
-- ActiveLearner gates multi-target inputs at the boundary
+- ActiveLearner gates multi-target inputs on the acquisition's
+  capability (scalar-only acquisitions raise; exploration ones run)
 
 These are smoke-level shape and consistency checks, not coverage
 guarantees — those live in `test_conformal.py`.
@@ -51,24 +52,45 @@ def test_conformal_predict_interval_multi_target(rng) -> None:
     assert np.all(hi_np >= lo_np)
 
 
-def test_active_learner_rejects_multi_target_y(rng) -> None:
-    """ActiveLearner is single-output; multi-target y must surface a
-    clear error rather than flatten silently inside an acquisition."""
-    from jax_ldt.active_learning import ActiveLearner, ExpectedImprovement
+def _multitarget_learner(acquisition):
+    from jax_ldt.active_learning import ActiveLearner
     from jax_ldt.active_learning.batching import TopKBatchSelector
 
-    X, Y = _make_multitarget(rng, n=80)
-    learner = ActiveLearner(
+    return ActiveLearner(
         model_factory=lambda: LinearTreeRegressor(
             max_depth=2, max_bins=4, min_samples_leaf=10
         ),
-        acquisition=ExpectedImprovement(direction="min"),
+        acquisition=acquisition,
         batcher=TopKBatchSelector(),
         bounds=np.array([[-1, 1], [-1, 1], [-1, 1]], dtype=np.float64),
+        batch_size=4,
         seed=0,
     )
+
+
+def test_active_learner_rejects_multi_target_y_for_scalar_acquisition(rng) -> None:
+    """EI scores against a scalar best-y, so multi-target y must surface a
+    clear error rather than flatten silently inside the acquisition."""
+    from jax_ldt.active_learning import ExpectedImprovement
+
+    X, Y = _make_multitarget(rng, n=80)
+    learner = _multitarget_learner(ExpectedImprovement(direction="min"))
     with pytest.raises(ValueError, match="single-target"):
         learner.tell(X, Y)
+
+
+def test_active_learner_accepts_multi_target_y_for_exploration(rng) -> None:
+    """UncertaintySampler never reads a best-y, so the same data must
+    flow through to a multi-output surrogate (issue #3)."""
+    from jax_ldt.active_learning import UncertaintySampler
+
+    X, Y = _make_multitarget(rng, n=80)
+    learner = _multitarget_learner(UncertaintySampler())
+    learner.tell(X, Y)
+    assert learner.n_targets == 2
+    assert learner.model.n_targets_ == 2
+    _, X_batch = learner.ask()
+    assert X_batch.shape == (4, 3)
 
 
 def test_acquisition_sigma_rejects_multi_target_tree(rng) -> None:

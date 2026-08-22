@@ -161,20 +161,23 @@ def test_save_and_load_round_trip(tmp_path, rng) -> None:
     np.testing.assert_allclose(yh_loaded, yh_orig, atol=1e-12)
 
 
-def test_multi_target_y_rejected(rng) -> None:
-    """G-9: tell() with multi-target y must raise a clear error, not silently flatten."""
+def test_multi_target_y_rejected_for_scalar_acquisition(rng) -> None:
+    """G-9: multi-target y paired with a best-y acquisition must raise a
+    clear error naming the acquisition, not silently flatten."""
     bounds = _bounds_2d()
     loop = ActiveLearner(
         model_factory=_model_factory,
-        acquisition=UncertaintySampler(),
+        acquisition=ExpectedImprovement(direction="min"),
         batcher=TopKBatchSelector(),
         bounds=bounds,
         batch_size=4,
     )
     X0 = rng.uniform(bounds[:, 0], bounds[:, 1], size=(10, 2))
     y0 = np.column_stack([X0[:, 0], X0[:, 1]])  # shape (10, 2): 2 targets
-    with pytest.raises(ValueError, match="single-target"):
+    with pytest.raises(ValueError, match="ExpectedImprovement.*single-target"):
         loop.tell(X0, y0)
+    # The constraint belongs to the acquisition, so nothing was ingested.
+    assert loop.y_observed.shape == (0,)
 
 
 def test_save_load_preserves_candidate_stream(tmp_path, rng) -> None:

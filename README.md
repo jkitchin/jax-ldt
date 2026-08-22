@@ -46,9 +46,34 @@ Why use one?
 
 ## Install
 
+`jax-ldt` is **not on PyPI** — `pip install jax-ldt` will fail with
+`No matching distribution found`. Install from the repository:
+
 ```bash
+pip install "jax-ldt @ git+https://github.com/jkitchin/jax-ldt.git"
+```
+
+or, for a checkout you intend to work on:
+
+```bash
+git clone https://github.com/jkitchin/jax-ldt.git
+cd jax-ldt
 pip install -e ".[dev,onnx]"
 ```
+
+> **Enable 64-bit JAX before importing anything.** Every fit runs in
+> float64 and raises a `RuntimeError` if x64 is off. JAX reads the flag
+> once, at first import, so it has to be set first — and it is easy to
+> miss when some other library in your import graph happens to set it
+> for you:
+>
+> ```python
+> import os
+> os.environ["JAX_ENABLE_X64"] = "1"   # before importing jax / jax_ldt
+> ```
+>
+> Equivalently, `jax.config.update("jax_enable_x64", True)` immediately
+> after importing `jax` and before importing `jax_ldt`.
 
 Optional extras:
 
@@ -176,6 +201,52 @@ batches but **not** the trained tree (it is refit on `load`), so
 campaigns survive internal layout changes. Index-aligned `tell`
 accepts subsets of a batch — unanswered rows stay pending and can be
 re-proposed in the next round.
+
+### Multi-target campaigns
+
+`tell` accepts `y` of shape `(n, k)`, so one campaign can build a
+multi-output surrogate — the usual shape of the problem when the
+surrogate will later be embedded in an optimisation model and every
+output has to be accurate. A single batch of expensive evaluations then
+serves all `k` targets at once, with `GreedyMaxMinBatchSelector`'s
+diversity logic applied to that one batch.
+
+Whether multi-target data is usable is a property of the *acquisition*,
+advertised as `requires_scalar_target`:
+
+| acquisition | `requires_scalar_target` | multi-target |
+|-------------|--------------------------|--------------|
+| `UncertaintySampler`, `MaxVariance` | `False` | yes |
+| `ExpectedImprovement`, `ProbabilityOfImprovement` | `True` | no — "best y so far" is undefined for a vector |
+
+Pairing a scalar-only acquisition with `(n, k)` data raises; the
+exploration acquisitions run. Third-party acquisitions that do not
+declare the flag are treated as scalar-only.
+
+**How `k` uncertainties become one score.** Targets routinely live on
+different scales, and an unnormalised max or sum lets the
+largest-magnitude target claim every batch. Each target's σ is therefore
+divided by a reference scale before the per-candidate reduction
+(`reduce="max"` by default, or `"mean"`):
+
+```python
+loop = ActiveLearner(
+    model_factory=lambda: HyperplaneTreeRegressor(max_depth=5),
+    # tolerance actually required on each target
+    acquisition=UncertaintySampler(target_scales=[0.01, 5.0]),
+    batcher=GreedyMaxMinBatchSelector(),
+    bounds=bounds, batch_size=8,
+)
+loop.tell(X0, Y0)          # Y0 is (n, 2)
+```
+
+With explicit `target_scales`, a batch goes to whichever target is worst
+*relative to the accuracy needed on it* rather than worst in absolute
+units. If you leave `target_scales=None`, `ActiveLearner` falls back to
+each target's observed standard deviation, recomputed every round; used
+standalone (outside the loop) with no scales at all, the reduction is
+over raw σ. Single-target campaigns skip all of this — the score is the
+raw σ (or σ²), exactly as before.
 
 ## Export and MIP embedding
 
