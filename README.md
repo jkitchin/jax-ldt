@@ -14,8 +14,8 @@ batched active-learning loop.
 This is a JAX rewrite of the PyTorch
 [hyperplanetree](https://github.com/LLNL/systems2atoms/tree/main/systems2atoms/hyperplanetree)
 library, omitting the Pyomo/OMLT runtime dependency. Trained models
-export to a solver-neutral JSON spec and to ONNX, which can still be
-consumed by OMLT externally for MILP embedding.
+export to a solver-neutral JSON spec and to ONNX, and embed as exact
+MILPs in Pyomo or discopt through optional adapters.
 
 This implementation was motivated by this work: Ethan M. Sunshine, Carolina Colombo Tedesco, Sneha A. Akhade, Matthew J. McNenly, John R. Kitchin, and Carl D. Laird, Hyperplane Decision Trees as Piecewise Linear Surrogate Models for Chemical Process Design, Computers & Chemical Engineering, (2025). https://doi.org/10.1016/j.compchemeng.2025.109204. 
 
@@ -82,6 +82,7 @@ Optional extras:
 |-------|------|-----|
 | `[onnx]` | `onnx`, `onnxruntime` | export + round-trip |
 | `[discopt]` | `discopt>=0.3` | direct MINLP embedding |
+| `[pyomo]` | `pyomo>=6.7` | Pyomo MILP embedding |
 | `[viz]` | `matplotlib` | plot helpers |
 | `[uq-metrics]` | `uncertainty-toolbox` | calibration / sharpness metrics |
 | `[steam]` | `iapws` | the steam-tables example |
@@ -257,7 +258,20 @@ Trained trees are pytrees and serialise three ways:
 from jax_ldt import to_json, from_json, to_onnx
 
 to_json(model, "tree.json")    # canonical, human-readable
-to_onnx(model, "tree.onnx")    # for onnxruntime / OMLT (external)
+to_onnx(model, "tree.onnx")    # for onnxruntime inference
+```
+
+To embed the tree as an exact MILP in **Pyomo** (`pip install jax-ldt[pyomo]`):
+
+```python
+import pyomo.environ as pyo
+from jax_ldt.export import embed_in_pyomo_model
+
+m = pyo.ConcreteModel()
+m.x = pyo.Var(range(n_features), bounds=(lb, ub))
+y = embed_in_pyomo_model(model, m, m.x)
+m.obj = pyo.Objective(expr=y[0])
+pyo.SolverFactory("appsi_highs").solve(m)
 ```
 
 For **direct MINLP optimisation** without Pyomo, embed in
@@ -274,15 +288,15 @@ m.minimize(y_expr[0])
 result = m.solve()
 ```
 
-The adapter encodes the standard "GDP via big-M" pattern OMLT uses,
-built directly with discopt primitives: lifted-feature equality
+Both adapters encode the standard "GDP via big-M" pattern OMLT uses,
+built directly from the tree: lifted-feature equality
 constraints, one binary `z_k` per leaf with `Σ z_k = 1`, big-M
 routing for every internal split, and big-M-linearised bilinear leaf
 regressions.
 
 ## Examples
 
-The `examples/` directory contains six executed notebooks:
+The `examples/` directory contains seven executed notebooks:
 
 | notebook | covers |
 |---|---|
@@ -292,6 +306,7 @@ The `examples/` directory contains six executed notebooks:
 | `04_mip_optimization.ipynb` | discopt MINLP minimising a learned tree |
 | `05_onnx_export.ipynb` | ONNX round-trip to 1e-9 |
 | `06_steam_tables.ipynb` | active-learning PHT surrogate against IAPWS-97 |
+| `07_pyomo_embedding.ipynb` | Pyomo MILP over a hyperplane tree, with side constraints |
 
 See [docs/](docs/) for the full guide: algorithm details, uncertainty
 quantification, active-learning loop, and MIP export.

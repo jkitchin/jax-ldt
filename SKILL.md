@@ -1,6 +1,6 @@
 ---
 name: jax-ldt
-description: Pure-JAX linear and hyperplane decision trees (port of LLNL's hyperplanetree). Piecewise-linear surrogate modeling with first-class uncertainty quantification (linear-propagation, quadratic-difference, Mondrian leaf conformal), batched active learning (ask/tell + run sugar with campaign persistence), and MIP-friendly export (solver-neutral JSON, hand-built ONNX, optional discopt adapter for direct MINLP embedding without Pyomo).
+description: Pure-JAX linear and hyperplane decision trees (port of LLNL's hyperplanetree). Piecewise-linear surrogate modeling with first-class uncertainty quantification (linear-propagation, quadratic-difference, Mondrian leaf conformal), batched active learning (ask/tell + run sugar with campaign persistence), and MIP-friendly export (solver-neutral JSON, hand-built ONNX, optional Pyomo and discopt adapters for exact MILP / MINLP embedding).
 allowed-tools: ["*"]
 ---
 
@@ -20,8 +20,8 @@ Key differences from upstream:
   split kernel, vmapped ridge fits, `float64` throughout (requires
   `JAX_ENABLE_X64=1`, enforced at fit time).
 - **No Pyomo / OMLT runtime dependency.** Trained models export to
-  JSON or ONNX (consumable by OMLT externally) and embed directly in
-  `discopt` MINLPs.
+  JSON or ONNX, and embed directly in Pyomo (optional `[pyomo]` extra)
+  or `discopt` MILPs / MINLPs.
 - First-class **uncertainty quantification** with three composable
   methods (linear propagation, quadratic difference, Mondrian leaf
   conformal — distribution-free with valid coverage).
@@ -68,6 +68,7 @@ Optional extras:
 |-------|------|-----|
 | `[onnx]` | `onnx`, `onnxruntime` | export + round-trip |
 | `[discopt]` | `discopt>=0.3` | MINLP embedding |
+| `[pyomo]` | `pyomo>=6.7` | Pyomo MILP embedding |
 | `[viz]` | `matplotlib` | plot helpers |
 | `[uq-metrics]` | `uncertainty-toolbox` | calibration / sharpness metrics |
 | `[dev]` | `pytest`, `torch`, `scikit-learn`, … | parity tests + tooling |
@@ -219,7 +220,20 @@ UncertaintySampler(target_scales=[0.01, 5.0])   # tight on target 0
 from jax_ldt import to_json, from_json, to_onnx
 
 to_json(model, "tree.json")          # canonical, human-readable
-to_onnx(model, "tree.onnx")          # for onnxruntime / OMLT (external)
+to_onnx(model, "tree.onnx")          # for onnxruntime inference (OMLT cannot read it)
+```
+
+For a **Pyomo** model (exact MILP, any Pyomo MILP solver):
+
+```python
+import pyomo.environ as pyo
+from jax_ldt.export import embed_in_pyomo_model
+
+m = pyo.ConcreteModel()
+m.x = pyo.Var(range(n_features), bounds=(lb, ub))
+y = embed_in_pyomo_model(model, m, m.x)   # adds sub-block m.tree
+m.obj = pyo.Objective(expr=y[0])
+pyo.SolverFactory("appsi_highs").solve(m)
 ```
 
 For **direct MINLP optimisation** without Pyomo, embed in `discopt`:
@@ -236,15 +250,15 @@ result = m.solve()
 print("argmin:", result.x["x"], "min y:", result.objective)
 ```
 
-The adapter encodes:
+Both adapters encode:
 1. lifted-feature equality constraints `x'_j = Σ A[i,j] x_i`,
 2. one binary `z_k` per leaf with `Σ z_k = 1`,
 3. big-M routing constraints for every internal split,
 4. bilinear leaf regressions `v_k = z_k · (β_k · x' + α_k)`
    linearised with big-M.
 
-This is the standard "GDP via big-M" pattern OMLT uses, but built
-directly with discopt primitives.
+This is the standard "GDP via big-M" pattern OMLT uses, built directly
+from the tree.
 
 ## Hyperparameter Cheat Sheet
 
@@ -342,6 +356,7 @@ in place — open them to see plots and outputs:
 | `04_mip_optimization.ipynb` | discopt MINLP that minimises a learned tree |
 | `05_onnx_export.ipynb` | round-trip via onnxruntime to 1e-9 |
 | `06_steam_tables.ipynb` | active-learning loop trains a PHT (P, h → T) surrogate against IAPWS-97; reproduces the paper's Figure 9 phase-diagram comparison |
+| `07_pyomo_embedding.ipynb` | Pyomo MILP (HiGHS) minimising a tree, with side constraints |
 
 The steam-table notebook needs the optional `[steam]` extra
 (`pip install -e ".[steam,onnx]"`) which adds the `iapws` package.

@@ -1,7 +1,7 @@
 # MIP / surrogate-embedding export
 
-A trained jax-ldt tree exports to two solver-neutral formats and one
-direct embedding into discopt.
+A trained jax-ldt tree exports to two solver-neutral formats and two
+direct MILP embeddings (Pyomo and discopt).
 
 ## JSON spec (canonical)
 
@@ -87,26 +87,36 @@ trees (depth 8 with hyperplane routing) widen the bound to roughly
 surrogate-optimisation use, but they are above the strict `1e-9`
 threshold one might first reach for.
 
-### OMLT consumption
+### Not an OMLT input
 
-The same ONNX file can be loaded by [OMLT](https://github.com/cog-imperial/OMLT)
-in any environment that has Pyomo. We document the recipe here but do
-**not** depend on `pyomo` or `omlt` at runtime.
+OMLT's ONNX reader (`omlt.io.load_onnx_neural_network`) only understands
+neural-network layers (Gemm, MatMul, ReLU, ...). The routing ops in this
+graph (`Squeeze`, `Gather`, `LessOrEqual`, ...) are rejected, so the
+ONNX export is for inference, not MILP embedding. For Pyomo use the
+adapter below.
+
+## Pyomo embedding
 
 ```python
-# In a separate environment with omlt / pyomo installed:
 import pyomo.environ as pyo
-from omlt import OmltBlock
-from omlt.io import load_onnx_neural_network
+from jax_ldt.export import embed_in_pyomo_model
 
 m = pyo.ConcreteModel()
-m.surrogate = OmltBlock()
-network = load_onnx_neural_network("tree.onnx")
-m.surrogate.build_formulation(...)
+m.x = pyo.Var(range(n_features), bounds=(lb, ub))
+y = embed_in_pyomo_model(model, m, m.x)   # adds sub-block m.tree
+m.obj = pyo.Objective(expr=y[0])
+pyo.SolverFactory("appsi_highs").solve(m)
 ```
 
-(See OMLT docs for full details; the surrogate block accepts standard
-ONNX neural-network-style graphs, which our tree's routing graph is.)
+`x_vars` can be an IndexedVar (taken in index order) or any sequence of
+Pyomo variables or linear expressions. The formulation is identical to
+the discopt adapter below (lifted features, one binary per leaf, big-M
+routing, big-M-linearised leaf outputs) and is an exact MILP, so any
+Pyomo MILP solver works. Big-Ms are derived per node and per leaf from
+the bounds on `x_vars`; pass `big_m=` to override (validated when the
+inputs are bounded). Everything lives on `m.<name>` (default `"tree"`),
+so several trees can share one model. Install with
+`pip install jax-ldt[pyomo]`; Pyomo is not a core dependency.
 
 ## discopt embedding (no Pyomo)
 
@@ -145,6 +155,6 @@ built directly with discopt primitives. See
 |------|--------|
 | Round-trip in Python | JSON spec |
 | Inference in C++ / browser / mobile | ONNX |
-| OMLT / Pyomo MILP embedding | ONNX |
+| Pyomo MILP embedding | Pyomo adapter |
 | MILP / MINLP solve in pure Python (no Pyomo) | discopt adapter |
 | Custom solver / spec for scipy / HiGHS | JSON spec → user-built MILP arrays |

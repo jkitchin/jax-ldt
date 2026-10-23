@@ -71,7 +71,7 @@ to_json(model, "tree.json")
 tree = from_json("tree.json")
 y_again = predict_tree(tree, X_grid)
 
-# ONNX (consumable by OMLT, onnxruntime, …)
+# ONNX (for onnxruntime inference)
 to_onnx(model, "tree.onnx")
 ```
 

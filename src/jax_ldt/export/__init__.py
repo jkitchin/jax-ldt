@@ -32,3 +32,13 @@ def embed_in_discopt_model(*args, **kwargs):
 
 
 __all__.extend(["to_discopt_decision_tree", "embed_in_discopt_model"])
+
+
+def embed_in_pyomo_model(*args, **kwargs):
+    """Lazy proxy: exact big-M MILP embedding of an LMDT/HT into a Pyomo model."""
+    from jax_ldt.export.pyomo_adapter import embed_in_pyomo_model as _impl
+
+    return _impl(*args, **kwargs)
+
+
+__all__.append("embed_in_pyomo_model")

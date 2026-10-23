@@ -48,6 +48,7 @@ dependencies = [
 onnx = ["onnx", "onnxruntime"]
 viz = ["matplotlib"]
 discopt = ["discopt>=0.3"]
+pyomo = ["pyomo>=6.7"]
 uq-metrics = ["uncertainty-toolbox"]
 steam = ["iapws"]
 sklearn = ["scikit-learn"]
@@ -93,6 +94,7 @@ markers = [
     "perf: performance benchmarks (slow)",
     "discopt: tests requiring discopt",
     "onnx: tests requiring onnx/onnxruntime",
+    "pyomo: tests requiring pyomo (and the HiGHS solver for solve tests)",
 ]
 
 [tool.ruff]
