@@ -101,7 +101,7 @@ def _dense_losses(loss_name, X_fit, y, node_mask, X_split, thresholds,
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("loss_name", ["mae", "rmse", "max_abs"])
+@pytest.mark.parametrize("loss_name", ["mae", "mse", "rmse", "max_abs"])
 @pytest.mark.parametrize("drop_cols", [(), (2, 5, 9)])
 def test_reduced_kernel_matches_dense_ridge(loss_name, drop_cols) -> None:
     """Kernel losses must match an explicit n_aug-space ridge fit.

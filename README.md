@@ -125,7 +125,7 @@ off, since float32 would silently corrupt the ridge solve).
 | `min_samples_leaf` | 0.01 (frac) | min rows per leaf |
 | `min_samples_split` | 6 | min rows to attempt a split |
 | `ridge` | 1e-5 | ridge regularisation in leaf fits |
-| `criterion` | `"mae"` | one of `mae` / `rmse` / `msle` / `max_abs` |
+| `criterion` | `"mae"` | one of `mae` / `mse` / `rmse` / `msle` / `max_abs` |
 | `max_weight` (HT) | 1 | int weight cap in hyperplane enumeration |
 | `num_terms` (HT) | 2 | features combined per oblique split |
 

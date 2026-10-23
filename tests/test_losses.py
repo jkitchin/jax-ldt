@@ -5,7 +5,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 import numpy as np
 
-from jax_ldt.losses import CRITERIA, mae, max_abs, msle, resolve_criterion, rmse
+from jax_ldt.losses import CRITERIA, mae, max_abs, mse, msle, resolve_criterion, rmse
 
 
 def test_mae_basic() -> None:
@@ -18,6 +18,12 @@ def test_rmse_basic() -> None:
     y = jnp.array([[1.0], [2.0], [3.0]])
     yh = jnp.array([[2.0], [3.0], [4.0]])
     np.testing.assert_allclose(rmse(y, yh, dim=0), [1.0], rtol=1e-6)
+
+
+def test_mse_basic() -> None:
+    y = jnp.array([[1.0], [2.0], [3.0]])
+    yh = jnp.array([[2.0], [3.0], [5.0]])
+    np.testing.assert_allclose(mse(y, yh, dim=0), [2.0], rtol=1e-6)
 
 
 def test_max_abs_basic() -> None:

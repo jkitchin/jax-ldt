@@ -52,7 +52,7 @@ def test_fit_branin_reasonable_quality(branin_2d) -> None:
     assert 0.90 <= r2 <= 0.999, f"R^2 outside expected band: {r2:.3f}"
 
 
-@pytest.mark.parametrize("criterion", ["mae", "rmse", "msle", "max_abs"])
+@pytest.mark.parametrize("criterion", ["mae", "mse", "rmse", "msle", "max_abs"])
 def test_all_documented_criteria_run(branin_2d, criterion) -> None:
     X, y = branin_2d
     if criterion == "msle":
@@ -67,6 +67,17 @@ def test_all_documented_criteria_run(branin_2d, criterion) -> None:
     mae_const = float(jnp.mean(jnp.abs(y - jnp.mean(y))))
     mae_tree = float(jnp.mean(jnp.abs(yh - y)))
     assert mae_tree < mae_const, f"{criterion}: tree no better than constant"
+
+
+def test_mse_and_rmse_grow_the_same_single_target_tree(branin_2d) -> None:
+    # For one target, rmse is the square root of mse over the same node,
+    # so both rank every candidate split identically.
+    X, y = branin_2d
+    kw = dict(max_depth=4, max_bins=8, min_samples_leaf=10)
+    t_mse = LinearTreeRegressor(criterion="mse", **kw).fit(X, y).tree_
+    t_rmse = LinearTreeRegressor(criterion="rmse", **kw).fit(X, y).tree_
+    np.testing.assert_array_equal(np.asarray(t_mse.feature), np.asarray(t_rmse.feature))
+    np.testing.assert_array_equal(np.asarray(t_mse.threshold), np.asarray(t_rmse.threshold))
 
 
 def test_unknown_criterion_raises(toy_1d) -> None:

@@ -72,7 +72,7 @@ def _recompute(loss_name, X_aug, y, node_mask, X_split, thresholds, ridge=1e-5):
     return combined, weighted
 
 
-@pytest.mark.parametrize("loss_name", ["max_abs", "rmse", "mae"])
+@pytest.mark.parametrize("loss_name", ["max_abs", "rmse", "mae", "mse"])
 def test_kernel_uses_combined_prediction_loss(loss_name) -> None:
     rng = np.random.default_rng(1)
     N = 150
@@ -102,7 +102,7 @@ def test_kernel_uses_combined_prediction_loss(loss_name) -> None:
         # ...and must genuinely differ from the old weighted-average, so
         # this test fails against the pre-fix kernel.
         assert np.nanmax(np.abs(combined - weighted)) > 1e-6
-    else:  # mae reduces exactly to the weighted average
+    else:  # mae and mse reduce exactly to the weighted average
         np.testing.assert_allclose(
             combined[finite], weighted[finite], atol=1e-9
         )

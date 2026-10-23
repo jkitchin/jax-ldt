@@ -122,6 +122,15 @@ def _weighted_mae(y: jnp.ndarray, yh: jnp.ndarray, w: jnp.ndarray) -> jnp.ndarra
     return jnp.where(sw > 0.0, out, jnp.inf)
 
 
+def _weighted_mse(y: jnp.ndarray, yh: jnp.ndarray, w: jnp.ndarray) -> jnp.ndarray:
+    """Weighted mean squared error per target. y, yh: (N, T); w: (N,). Returns (T,)."""
+    err = ((y - yh) ** 2) * w[:, None]
+    sw = jnp.sum(w)
+    safe_sw = jnp.where(sw > 0.0, sw, 1.0)
+    out = jnp.sum(err, axis=0) / safe_sw
+    return jnp.where(sw > 0.0, out, jnp.inf)
+
+
 def _weighted_rmse(y: jnp.ndarray, yh: jnp.ndarray, w: jnp.ndarray) -> jnp.ndarray:
     err = ((y - yh) ** 2) * w[:, None]
     sw = jnp.sum(w)
@@ -153,6 +162,7 @@ def _weighted_max_abs(y: jnp.ndarray, yh: jnp.ndarray, w: jnp.ndarray) -> jnp.nd
 
 _WEIGHTED_LOSS_FNS = {
     "mae": _weighted_mae,
+    "mse": _weighted_mse,
     "rmse": _weighted_rmse,
     "msle": _weighted_msle,
     "max_abs": _weighted_max_abs,
@@ -299,7 +309,7 @@ def _evaluate_splits_kernel(
     # whole node (upstream convention). A row takes its own side's
     # prediction; rows outside the node get 0 and are excluded by the
     # node_mask weights. Criterion-correct for every loss: mean-type
-    # losses (mae, msle) reduce to the sample-weighted average of the two
+    # losses (mae, mse, msle) reduce to the sample-weighted average of the two
     # sides, rmse pools under the sqrt, max_abs takes the max across sides.
     yh_combined = yh_below * mb_flat[:, :, None] + yh_above * ma_flat[:, :, None]
     overall_flat = jax.vmap(lambda yh: weighted_loss(y, yh, node_mask))(yh_combined)
@@ -532,7 +542,7 @@ def grow_tree(
     linear_features, split_features, categorical_features
         Index sets in the **transformed** column space; default to
         every non-categorical column.
-    criterion : {"mae", "rmse", "msle", "max_abs"}
+    criterion : {"mae", "mse", "rmse", "msle", "max_abs"}
         Split-loss name. Callable criteria are not supported by the
         inner JIT kernel.
     max_depth, max_bins, min_samples_split, min_samples_leaf,

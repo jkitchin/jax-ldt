@@ -40,8 +40,8 @@ class HyperplaneTreeRegressor:
     Parameters
     ----------
     criterion : str, default ``"mae"``
-        Split-loss criterion. One of ``"mae"``, ``"rmse"``, ``"msle"``,
-        ``"max_abs"``.
+        Split-loss criterion. One of ``"mae"``, ``"mse"``, ``"rmse"``,
+        ``"msle"``, ``"max_abs"``.
     max_depth : int, default ``32``
         Maximum tree depth (root is depth 0). Practical sweet spot is
         5-8; deeper trees overfit before they help.

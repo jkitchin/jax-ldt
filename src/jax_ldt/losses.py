@@ -46,6 +46,15 @@ def mae(y: jnp.ndarray, yh: jnp.ndarray, weights: Optional[jnp.ndarray] = None,
     return jnp.mean(err, axis=dim)
 
 
+def mse(y: jnp.ndarray, yh: jnp.ndarray, weights: Optional[jnp.ndarray] = None,
+        dim: int = -1) -> jnp.ndarray:
+    sq = (y - yh) ** 2
+    if weights is not None:
+        w = _broadcast_weights(weights, sq, dim)
+        return _safe_weighted_mean(sq * w, w, dim)
+    return jnp.mean(sq, axis=dim)
+
+
 def rmse(y: jnp.ndarray, yh: jnp.ndarray, weights: Optional[jnp.ndarray] = None,
          dim: int = -1) -> jnp.ndarray:
     sq = (y - yh) ** 2
@@ -84,6 +93,7 @@ def max_abs(y: jnp.ndarray, yh: jnp.ndarray, weights: Optional[jnp.ndarray] = No
 
 CRITERIA: dict[str, LossFn] = {
     "mae": mae,
+    "mse": mse,
     "rmse": rmse,
     "msle": msle,
     "max_abs": max_abs,
