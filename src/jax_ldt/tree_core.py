@@ -52,7 +52,7 @@ Design notes:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Optional
 
 import jax
@@ -62,6 +62,7 @@ import numpy as np
 
 from jax_ldt._types import LeafUQ, Tree
 from jax_ldt.linear_regression import add_bias
+from jax_ldt.node_model import NodeContext, NodeModel, _check_fit_output, _check_scores
 
 
 # --------------------------------------------------------------------------
@@ -511,6 +512,7 @@ def grow_tree(
     min_impurity_decrease: float = 0.0,
     ridge: float = 1e-5,
     depth_first: bool = True,
+    node_model: Optional[NodeModel] = None,
 ) -> Tree:
     """Build a piecewise-linear decision tree.
 
@@ -538,6 +540,9 @@ def grow_tree(
     max_depth, max_bins, min_samples_split, min_samples_leaf,
     min_impurity_decrease, ridge, depth_first
         See :class:`LinearTreeRegressor` for semantics.
+    node_model : NodeModel, optional
+        Custom node fit and split scoring; see :mod:`jax_ldt.node_model`.
+        ``None`` uses ridge least squares and the split kernel.
     """
     # Force float64 at the boundary so a user passing float32 doesn't
     # silently downgrade the whole pipeline when JAX_ENABLE_X64=1. When
@@ -619,6 +624,19 @@ def grow_tree(
     nodes: list[_GrowNode] = []
     node_masks: list[jnp.ndarray] = []
     node_loss: list[float] = []
+    # Splits from the root to each node, as (X_t column, threshold, side);
+    # handed to a custom node model, not stored in the Tree.
+    node_paths: list[tuple[tuple[int, float, str], ...]] = []
+
+    # Fit-wide context for a custom node model (unused without one);
+    # per-node fields are filled in with `replace` at each call. Arrays
+    # that growth relies on afterwards are handed over read-only.
+    lin_cols_ro = lin_cols.copy()
+    lin_cols_ro.flags.writeable = False
+    base_ctx = NodeContext(
+        X=X, X_t=X_t, y=y, transform_matrix=transform_matrix,
+        linear_columns=lin_cols_ro, mask=root_mask, depth=0, path=(),
+    )
 
     def _leaf_stats(
         mask: jnp.ndarray, params: jnp.ndarray
@@ -651,13 +669,20 @@ def grow_tree(
         nd.leaf_n = n_leaf
         nd.leaf_mse = mse
 
-    def _add_node(mask: jnp.ndarray) -> int:
+    def _add_node(
+        mask: jnp.ndarray, depth: int, path: tuple[tuple[int, float, str], ...]
+    ) -> int:
         """Fit the node's regression, register it, and record its loss.
 
         Returns the new node id. The node starts as a non-leaf
         placeholder; `_finalize_leaf` promotes it if growth stops here.
         """
-        params, loss = _initial_leaf(X_fit, y, mask, ridge, criterion)
+        if node_model is None:
+            params, loss = _initial_leaf(X_fit, y, mask, ridge, criterion)
+            loss_value = float(loss)
+        else:
+            ctx = replace(base_ctx, mask=mask, depth=depth, path=path)
+            params, loss_value = _check_fit_output(node_model.fit(ctx), n_aug, T, lin_cols)
         nid = len(nodes)
         nodes.append(
             _GrowNode(
@@ -675,14 +700,16 @@ def grow_tree(
             )
         )
         node_masks.append(mask)
-        node_loss.append(float(loss))
+        node_loss.append(loss_value)
+        node_paths.append(path)
         return nid
 
     # --- queue: list of (node_id, depth) ---
-    root_id = _add_node(root_mask)
+    root_id = _add_node(root_mask, 0, ())
     queue: list[tuple[int, int]] = [(root_id, 0)]
 
     split_feats_arr = jnp.asarray(split_features, dtype=jnp.int32)
+    split_features_t = tuple(int(f) for f in split_features)  # as given to a node model
     # Loop-invariant: the split-feature columns of X_t are the same for
     # every node (only the mask varies), so gather them once.
     X_split = X_t[:, split_feats_arr]
@@ -722,25 +749,45 @@ def grow_tree(
         active_idx = np.flatnonzero(mask_np > 0.0)
         X_split_subdomain = X_t_np[np.ix_(active_idx, split_features)]
         thresholds = _compute_thresholds(X_split_subdomain, max_bins)
-        if thresholds.shape[0] == 0:
+        if thresholds.size == 0:  # no thresholds or no split columns
             _finalize_leaf(node_id, mask)
             continue
 
-        # Candidate losses come back on the host already (the kernel is
-        # called once per column chunk); all selection happens on numpy.
-        overall_np = _evaluate_splits_chunked(
-            Z_raw,
-            ZK,
-            BBt,
-            y,
-            mask,
-            X_split,
-            thresholds,
-            float(ridge),
-            float(msl),
-            criterion,
-            chunk_cols,
-        )
+        if node_model is None:
+            # Candidate losses come back on the host already (the kernel is
+            # called once per column chunk); all selection happens on numpy.
+            overall_np = _evaluate_splits_chunked(
+                Z_raw,
+                ZK,
+                BBt,
+                y,
+                mask,
+                X_split,
+                thresholds,
+                float(ridge),
+                float(msl),
+                criterion,
+                chunk_cols,
+            )
+        else:
+            # The kernel's validity rule, on the host: both sides keep at
+            # least `msl` of the node's rows. (K, B), like the scores.
+            # Counts come from sorted columns, so memory stays O(N_active * K).
+            thr_np = np.asarray(thresholds)
+            X_sorted = np.sort(X_split_subdomain, axis=0)
+            n_below = np.stack([
+                np.searchsorted(X_sorted[:, k], thr_np[:, k], side="right")
+                for k in range(X_sorted.shape[1])
+            ])
+            valid = (n_below >= msl) & (n_active - n_below >= msl)
+            valid.flags.writeable = False
+            ctx = replace(
+                base_ctx, mask=mask, depth=depth, path=node_paths[node_id]
+            )
+            overall_np = _check_scores(
+                node_model.score_splits(ctx, thresholds, split_features_t, valid),
+                len(split_features_t), thr_np.shape[0], valid,
+            )
         if not np.isfinite(overall_np).any():
             _finalize_leaf(node_id, mask)
             continue
@@ -774,8 +821,10 @@ def grow_tree(
         # for split selection, so min_impurity_decrease comparisons on
         # grandchildren are consistent — and the fit is reused verbatim
         # if the child ends up a leaf.
-        left_id = _add_node(mask_below)
-        right_id = _add_node(mask_above)
+        parent_path = node_paths[node_id]
+        split = (split_feature_in_transformed_space, split_threshold)
+        left_id = _add_node(mask_below, depth + 1, parent_path + (split + ("L",),))
+        right_id = _add_node(mask_above, depth + 1, parent_path + (split + ("R",),))
 
         nodes[node_id].is_leaf = False
         nodes[node_id].feature = split_feature_in_transformed_space
